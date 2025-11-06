@@ -1,0 +1,111 @@
+name: Build and Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+jobs:
+  build-windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v3
+      
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.11'
+      
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install pyinstaller
+      
+      - name: Build with PyInstaller
+        run: |
+          pyinstaller SynergyED-img_annotate.spec
+      
+      - name: Upload Windows Artifact
+        uses: actions/upload-artifact@v3
+        with:
+          name: SynergyED-img_annotate-windows
+          path: dist/SynergyED-img_annotate.exe
+  
+  build-macos:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v3
+      
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.11'
+      
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install pyinstaller
+      
+      - name: Build with PyInstaller
+        run: |
+          pyinstaller SynergyED-img_annotate.spec
+      
+      - name: Upload macOS Artifact
+        uses: actions/upload-artifact@v3
+        with:
+          name: SynergyED-img_annotate-macos
+          path: dist/SynergyED-img_annotate
+  
+  build-linux:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+      
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.11'
+      
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install pyinstaller
+          sudo apt-get update
+          sudo apt-get install -y libxcb-xinerama0 libxcb-cursor0
+      
+      - name: Build with PyInstaller
+        run: |
+          pyinstaller SynergyED-img_annotate.spec
+      
+      - name: Upload Linux Artifact
+        uses: actions/upload-artifact@v3
+        with:
+          name: SynergyED-img_annotate-linux
+          path: dist/SynergyED-img_annotate
+
+  create-release:
+    needs: [build-windows, build-macos, build-linux]
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/')
+    steps:
+      - uses: actions/checkout@v3
+      
+      - name: Download all artifacts
+        uses: actions/download-artifact@v3
+      
+      - name: Create Release
+        uses: softprops/action-gh-release@v1
+        with:
+          files: |
+            SynergyED-img_annotate-windows/SynergyED-img_annotate.exe
+            SynergyED-img_annotate-macos/SynergyED-img_annotate
+            SynergyED-img_annotate-linux/SynergyED-img_annotate
+          draft: false
+          prerelease: false
+          generate_release_notes: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
