@@ -34,12 +34,50 @@ a = Analysis(
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
-    excludes=[],
+    excludes=[
+        # Exclude unnecessary PyQt6 modules to reduce size
+        'PyQt6.QtWebEngine',
+        'PyQt6.QtWebEngineWidgets',
+        'PyQt6.QtWebEngineCore',
+        'PyQt6.QtNetwork',
+        'PyQt6.QtBluetooth',
+        'PyQt6.QtDBus',
+        'PyQt6.QtDesigner',
+        'PyQt6.QtHelp',
+        'PyQt6.QtLocation',
+        'PyQt6.QtMultimedia',
+        'PyQt6.QtMultimediaWidgets',
+        'PyQt6.QtNfc',
+        'PyQt6.QtPositioning',
+        'PyQt6.QtQml',
+        'PyQt6.QtQuick',
+        'PyQt6.QtQuickWidgets',
+        'PyQt6.QtRemoteObjects',
+        'PyQt6.QtSensors',
+        'PyQt6.QtSerialPort',
+        'PyQt6.QtSql',  # SQL module - not needed
+        'PyQt6.QtSvg',
+        'PyQt6.QtSvgWidgets',
+        'PyQt6.QtTest',
+        'PyQt6.QtWebChannel',
+        'PyQt6.QtWebSockets',
+        'PyQt6.QtXml',
+    ],
     win_no_prefer_redirects=False,
     win_private_assemblies=False,
     cipher=block_cipher,
     noarchive=False,
 )
+
+# Filter out SQL driver plugins that cause warnings
+a.binaries = [x for x in a.binaries if not (
+    'qsqlpsql' in x[0] or      # PostgreSQL driver
+    'qsqlibase' in x[0] or     # Firebird driver
+    'qsqlmimer' in x[0] or     # Mimer SQL driver
+    'qsqloci' in x[0] or       # Oracle driver
+    'qsqlodbc' in x[0] or      # ODBC driver (optional)
+    'qsqltds' in x[0]          # TDS driver (optional)
+)]
 
 pyz = PYZ(a.pure, a.zipped_data, cipher=block_cipher)
 
