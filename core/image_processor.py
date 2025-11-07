@@ -13,6 +13,7 @@ class ImageProcessor:
     
     def __init__(self):
         self.original_image: Optional[np.ndarray] = None
+        self.raw_image: Optional[np.ndarray] = None  # Store raw data before normalization
         self.current_image: Optional[np.ndarray] = None
         self.input_dpi: Optional[Tuple[float, float]] = None
         self.min_val = 0
@@ -63,15 +64,67 @@ class ImageProcessor:
                 self.input_dpi = None
             
             # Convert to grayscale if needed
-            if pil_image.mode != 'L' and pil_image.mode != 'I;16':
+            if pil_image.mode not in ['L', 'I', 'I;16', 'F']:
                 pil_image = pil_image.convert('L')
             
             self.original_image = np.array(pil_image)
+            self.raw_image = self.original_image.copy()  # Store raw data before normalization
             
-            # Handle 16-bit images
+            # Print diagnostic info
+            print(f"Loaded image dtype: {self.original_image.dtype}")
+            print(f"Image range: min={np.min(self.original_image):.2f}, max={np.max(self.original_image):.2f}")
+            print(f"Image mean: {np.mean(self.original_image):.2f}")
+            
+            # Handle different bit depths and normalize to 8-bit
             if self.original_image.dtype == np.uint16:
-                # Normalize to 8-bit for display
-                self.original_image = (self.original_image / 256).astype(np.uint8)
+                # 16-bit unsigned integer
+                img_min = np.min(self.original_image)
+                img_max = np.max(self.original_image)
+                print(f"16-bit image detected, normalizing range [{img_min}, {img_max}] to [0, 255]")
+                
+                if img_max > img_min:
+                    normalized = (self.original_image.astype(np.float32) - img_min) / (img_max - img_min) * 255
+                    self.original_image = normalized.astype(np.uint8)
+                else:
+                    self.original_image = np.zeros_like(self.original_image, dtype=np.uint8)
+                    
+            elif self.original_image.dtype in [np.float32, np.float64]:
+                # 32-bit or 64-bit float
+                img_min = np.min(self.original_image)
+                img_max = np.max(self.original_image)
+                print(f"Float image detected, normalizing range [{img_min:.4f}, {img_max:.4f}] to [0, 255]")
+                
+                if img_max > img_min:
+                    normalized = (self.original_image - img_min) / (img_max - img_min) * 255
+                    self.original_image = normalized.astype(np.uint8)
+                else:
+                    self.original_image = np.zeros((self.original_image.shape), dtype=np.uint8)
+                    
+            elif self.original_image.dtype == np.uint32 or self.original_image.dtype == np.int32:
+                # 32-bit integer
+                img_min = np.min(self.original_image)
+                img_max = np.max(self.original_image)
+                print(f"32-bit integer image detected, normalizing range [{img_min}, {img_max}] to [0, 255]")
+                
+                if img_max > img_min:
+                    normalized = (self.original_image.astype(np.float64) - img_min) / (img_max - img_min) * 255
+                    self.original_image = normalized.astype(np.uint8)
+                else:
+                    self.original_image = np.zeros((self.original_image.shape), dtype=np.uint8)
+            
+            # If already 8-bit, use as-is
+            elif self.original_image.dtype != np.uint8:
+                # Fallback for any other type
+                print(f"Unknown dtype {self.original_image.dtype}, converting to uint8")
+                img_min = np.min(self.original_image)
+                img_max = np.max(self.original_image)
+                if img_max > img_min:
+                    normalized = (self.original_image.astype(np.float64) - img_min) / (img_max - img_min) * 255
+                    self.original_image = normalized.astype(np.uint8)
+                else:
+                    self.original_image = np.zeros((self.original_image.shape), dtype=np.uint8)
+            
+            print(f"After normalization: dtype={self.original_image.dtype}, range=[{np.min(self.original_image)}, {np.max(self.original_image)}]")
             
             self.current_image = self.original_image.copy()
             
@@ -89,11 +142,26 @@ class ImageProcessor:
             return
         
         # Calculate percentiles for auto-adjustment
-        p_low = np.percentile(self.original_image, 2)
-        p_high = np.percentile(self.original_image, 98)
+        # Use more aggressive percentiles (0.1% and 99.9%) to better handle the normalized 8-bit data
+        p_low = np.percentile(self.original_image, 0.1)
+        p_high = np.percentile(self.original_image, 99.9)
+        
+        # Ensure min and max are different
+        if p_high <= p_low:
+            p_low = np.min(self.original_image)
+            p_high = np.max(self.original_image)
+        
+        # Add some margin if the range is still too narrow
+        range_val = p_high - p_low
+        if range_val < 10:  # If range is very narrow
+            mid = (p_high + p_low) / 2
+            p_low = max(0, mid - 25)
+            p_high = min(255, mid + 25)
         
         self.min_val = int(p_low)
         self.max_val = int(p_high)
+        
+        print(f"Auto-adjust: min={self.min_val}, max={self.max_val} (range={self.max_val - self.min_val})")
         
         self.apply_brightness_contrast()
     
@@ -108,13 +176,16 @@ class ImageProcessor:
         if self.original_image is None:
             return
         
-        # Apply contrast stretching
+        # Apply contrast stretching with proper input->output mapping
+        # min_val and max_val define the INPUT range that gets mapped to 0-255 OUTPUT
         img = self.original_image.astype(np.float32)
         
-        # Clip and normalize
-        img = np.clip(img, self.min_val, self.max_val)
         if self.max_val > self.min_val:
+            # Map [min_val, max_val] input range to [0, 255] output range
+            # Values below min_val -> black (0)
+            # Values above max_val -> white (255)
             img = (img - self.min_val) / (self.max_val - self.min_val) * 255
+            img = np.clip(img, 0, 255)
         
         self.current_image = img.astype(np.uint8)
     
