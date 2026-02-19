@@ -3,9 +3,10 @@ Image processing module for TEM Image Editor.
 Handles image loading, transformations, and brightness/contrast adjustments.
 """
 
-from typing import Optional, Tuple
+from typing import Optional, Tuple, Dict
 import numpy as np
 from PIL import Image
+from pathlib import Path
 
 
 class ImageProcessor:
@@ -19,56 +20,139 @@ class ImageProcessor:
         self.min_val = 0
         self.max_val = 255
         
-    def load_image(self, file_path: str) -> Tuple[bool, Optional[str], Optional[Tuple[int, int]]]:
+    def load_image(self, file_path: str) -> Tuple[bool, Optional[str], Optional[Tuple[int, int]], Optional[Dict[str, float]]]:
         """
         Load an image from file.
         
         Returns:
-            (success, error_message, (width, height))
+            (success, error_message, (width, height), pixel_metadata)
+            
+        pixel_metadata dict contains:
+            'pixel_size_mm': pixel size in millimeters (from rodhypix files)
+            'pixel_size_nm': pixel size in nanometers (calculated from mm)
+            'pixel_size_um': pixel size in micrometers (calculated from mm)
         """
         try:
-            # Load image using PIL
-            pil_image = Image.open(file_path)
+            file_ext = Path(file_path).suffix.lower()
+            pixel_metadata: Optional[Dict[str, float]] = None
             
-            # Try to capture source DPI metadata
-            self.input_dpi = None
-            try:
-                dpi = pil_image.info.get('dpi')
-                if dpi and isinstance(dpi, (tuple, list)) and len(dpi) == 2:
-                    self.input_dpi = (float(dpi[0]), float(dpi[1]))
+            # Check if it's a .rodhypix file
+            if file_ext == '.rodhypix':
+                from .rod_image_reader import RODImageReader
+                
+                # Load using RODImageReader
+                reader = RODImageReader(file_path, use_cpp=False, use_numba=True)
+                self.original_image = reader.get_raw_data()
+                self.raw_image = self.original_image.copy()
+                
+                # Get all header info for calibration
+                header_info = reader.get_header_info()
+                
+                # Physical pixel size of the detector (in mm)
+                physical_px_x, physical_px_y = reader.get_pixel_size()
+                physical_px_mm = (physical_px_x + physical_px_y) / 2.0
+                
+                # Get detector distance and wavelength for calibration
+                distance_mm = header_info.get('distance_mm', 0)
+                wavelength_angstrom = header_info.get('alpha1_wavelength', 0)
+                
+                print(f"\nLoaded .rodhypix file")
+                print(f"Physical detector pixel size: {physical_px_mm:.4f} mm ({physical_px_mm * 1000:.1f} µm)")
+                print(f"Detector distance: {distance_mm:.2f} mm")
+                print(f"Wavelength: {wavelength_angstrom:.4f} Å")
+                print(f"Decompression method: {reader.get_decompression_method()}")
+                
+                # Calculate reciprocal space pixel size (1/Å per pixel)
+                # For electron diffraction: k = 1/d = 2*sin(theta)/lambda
+                # For small angles: theta ≈ tan(theta) = pixel_size_mm / distance_mm
+                # Reciprocal spacing per pixel = pixel_size_mm / (wavelength_angstrom * distance_mm)
+                if distance_mm > 0 and wavelength_angstrom > 0:
+                    # Calculate scattering angle per pixel (in radians)
+                    angle_per_pixel_rad = physical_px_mm / distance_mm
+                    
+                    # Calculate reciprocal space per pixel (1/Å)
+                    # k = (2 * sin(theta)) / lambda ≈ (2 * theta) / lambda for small angles
+                    recip_per_pixel = (2.0 * angle_per_pixel_rad) / wavelength_angstrom
+                    
+                    # Convert to 1/nm
+                    recip_per_pixel_nm = recip_per_pixel / 10.0
+                    
+                    # Real space d-spacing per pixel (Å, then nm)
+                    d_spacing_angstrom = 1.0 / recip_per_pixel if recip_per_pixel > 0 else 0
+                    d_spacing_nm = d_spacing_angstrom / 10.0
+                    
+                    pixel_metadata = {
+                        'pixel_size_nm': d_spacing_nm,  # Real space d-spacing in nm
+                        'pixel_size_um': d_spacing_nm / 1000.0,  # Convert to µm
+                        'pixel_size_mm': d_spacing_nm / 1_000_000.0,  # Convert to mm
+                        'reciprocal_per_pixel_invnm': recip_per_pixel_nm,  # 1/nm per pixel
+                        'reciprocal_per_pixel_invangstrom': recip_per_pixel,  # 1/Å per pixel
+                        'detector_distance_mm': distance_mm,
+                        'wavelength_angstrom': wavelength_angstrom,
+                        'physical_pixel_size_mm': physical_px_mm,
+                    }
+                    
+                    print(f"\nCalculated calibration:")
+                    print(f"  Reciprocal space: {recip_per_pixel_nm:.6f} nm⁻¹/pixel ({recip_per_pixel:.6f} Å⁻¹/pixel)")
+                    print(f"  Real space d-spacing: {d_spacing_nm:.4f} nm/pixel ({d_spacing_angstrom:.4f} Å/pixel)")
                 else:
-                    # Some TIFFs store resolution differently
-                    res = pil_image.info.get('resolution')
-                    unit = pil_image.info.get('resolution_unit', 2)  # 2=inches, 3=cm
-                    if res and isinstance(res, (tuple, list)) and len(res) == 2:
-                        xres, yres = float(res[0]), float(res[1])
-                        if unit == 3:  # cm -> inch
-                            xres *= 2.54
-                            yres *= 2.54
-                        self.input_dpi = (xres, yres)
-                    else:
-                        # Fallback to TIFF tags if available
-                        tag = getattr(pil_image, 'tag_v2', None)
-                        if tag is not None:
-                            xres = tag.get(282)  # XResolution
-                            yres = tag.get(283)  # YResolution
-                            unit_tag = tag.get(296)  # ResolutionUnit (2=in, 3=cm)
-                            if xres and yres:
-                                xval = float(xres[0] / xres[1]) if isinstance(xres, (tuple, list)) else float(xres)
-                                yval = float(yres[0] / yres[1]) if isinstance(yres, (tuple, list)) else float(yres)
-                                if unit_tag == 3:  # cm
-                                    xval *= 2.54
-                                    yval *= 2.54
-                                self.input_dpi = (xval, yval)
-            except Exception:
+                    print(f"\nWarning: Cannot calculate calibration (missing distance or wavelength)")
+                    print(f"Using physical pixel size as fallback")
+                    pixel_metadata = {
+                        'pixel_size_mm': physical_px_mm,
+                        'pixel_size_um': physical_px_mm * 1000.0,
+                        'pixel_size_nm': physical_px_mm * 1_000_000.0,
+                    }
+                
+                # No DPI information for rodhypix files
                 self.input_dpi = None
+                
+            else:
+                # Load image using PIL for standard formats
+                pil_image = Image.open(file_path)
+            # else:
+            #     # Load image using PIL for standard formats
+            #     pil_image = Image.open(file_path)
             
-            # Convert to grayscale if needed
-            if pil_image.mode not in ['L', 'I', 'I;16', 'F']:
-                pil_image = pil_image.convert('L')
+                # Try to capture source DPI metadata
+                self.input_dpi = None
+                try:
+                    dpi = pil_image.info.get('dpi')
+                    if dpi and isinstance(dpi, (tuple, list)) and len(dpi) == 2:
+                        self.input_dpi = (float(dpi[0]), float(dpi[1]))
+                    else:
+                        # Some TIFFs store resolution differently
+                        res = pil_image.info.get('resolution')
+                        unit = pil_image.info.get('resolution_unit', 2)  # 2=inches, 3=cm
+                        if res and isinstance(res, (tuple, list)) and len(res) == 2:
+                            xres, yres = float(res[0]), float(res[1])
+                            if unit == 3:  # cm -> inch
+                                xres *= 2.54
+                                yres *= 2.54
+                            self.input_dpi = (xres, yres)
+                        else:
+                            # Fallback to TIFF tags if available
+                            tag = getattr(pil_image, 'tag_v2', None)
+                            if tag is not None:
+                                xres = tag.get(282)  # XResolution
+                                yres = tag.get(283)  # YResolution
+                                unit_tag = tag.get(296)  # ResolutionUnit (2=in, 3=cm)
+                                if xres and yres:
+                                    xval = float(xres[0] / xres[1]) if isinstance(xres, (tuple, list)) else float(xres)
+                                    yval = float(yres[0] / yres[1]) if isinstance(yres, (tuple, list)) else float(yres)
+                                    if unit_tag == 3:  # cm
+                                        xval *= 2.54
+                                        yval *= 2.54
+                                    self.input_dpi = (xval, yval)
+                except Exception:
+                    self.input_dpi = None
             
-            self.original_image = np.array(pil_image)
-            self.raw_image = self.original_image.copy()  # Store raw data before normalization
+                # Convert to grayscale if needed
+                if pil_image.mode not in ['L', 'I', 'I;16', 'F']:
+                    pil_image = pil_image.convert('L')
+            
+                self.original_image = np.array(pil_image)
+                self.raw_image = self.original_image.copy()  # Store raw data before normalization
             
             # Print diagnostic info
             print(f"Loaded image dtype: {self.original_image.dtype}")
@@ -131,10 +215,10 @@ class ImageProcessor:
             # Get dimensions
             height, width = self.original_image.shape
             
-            return True, None, (width, height)
+            return True, None, (width, height), pixel_metadata
             
         except Exception as e:
-            return False, str(e), None
+            return False, str(e), None, None
     
     def auto_adjust_contrast(self):
         """Automatically adjust brightness/contrast based on image histogram."""

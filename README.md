@@ -4,13 +4,25 @@ A PyQt6-based desktop application for processing (mainly) Synergy-ED images with
 
 ## Features
 
-- **Image Processing**: Load TIF/TIFF images with automatic brightness/contrast adjustment
+- **Image Processing**: Load TIF/TIFF/RODHyPix images with automatic brightness/contrast adjustment
+- **RODHyPix Support**: Native support for `.rodhypix` detector image files with automatic pixel size extraction
 - **Smart Scalebars**: Calibrated scalebars with customizable appearance (length, thickness, position, colors, font)
 - **Aperture Overlay**: Visualize SAED aperture sizes on images
 - **Batch Processing**: Process multiple images with consistent settings
 - **Imaging Presets**: Store and manage pixel size calibrations for different imaging modes
 - **Compact UI**: Laptop-friendly interface with collapsible sections and scrollable controls
 - **Multiple Export Formats**: PNG, TIFF, JPEG
+
+## Supported File Formats
+
+- **TIFF** (`.tif`, `.tiff`) - Standard microscopy format
+- **RODHyPix** (`.rodhypix`) - Rigaku Oxford Diffraction native format
+  - Automatically extracts pixel size from file header
+  - Supports Numba acceleration for faster loading (~10x speedup)
+  - Pure Python fallback if Numba is not installed
+- **PNG** (`.png`)
+- **JPEG** (`.jpg`, `.jpeg`)
+- **BMP** (`.bmp`)
 
 ## Quick Start
 
@@ -26,6 +38,12 @@ cd SynergyED-img_annotate
 ```bash
 pip install -r requirements.txt
 ```
+
+3. **(Optional)** Install Numba for faster RODHyPix file loading:
+```bash
+pip install numba
+```
+   This provides ~10x speedup when loading `.rodhypix` files. The application works without it using pure Python decompression.
 
 ### Usage
 
@@ -68,12 +86,30 @@ SynergyED-img_annotate/
 - NumPy >= 2.3.4
 - Pillow >= 12.0.0
 
+### Optional Dependencies
+
+- **numba** >= 0.60.0 (recommended for `.rodhypix` files)
+  - Provides ~10x speedup for RODHyPix decompression
+  - Install with: `pip install numba`
+
 ## Technical Details
 
 - **Image Processing**: 8-bit grayscale (16-bit images auto-normalized)
 - **Scalebar Calculation**: Accounts for nm/pixel calibration
+- **RODHyPix Support**: 
+  - Native reader adapted from [cap-auto](https://github.com/robertbuecker/cap-auto) (BSD 3-Clause)
+  - Automatic pixel size extraction from file header
+  - Supports TY6 compressed format
+  - Optimized with Numba JIT compilation when available
+  - Pure Python fallback for compatibility
 - **Architecture**: Modular design with separate core, GUI, and utility modules
 - **UI**: Collapsible sections for efficient screen space management
+
+## Acknowledgments
+
+- RODHyPix image reader adapted from [cap-auto](https://github.com/robertbuecker/cap-auto) by Robert Bücker (BSD 3-Clause)
+  - Original dxtbx code by David Waterman & Takanori Nakane
+  - Copyright: 2018-2023 United Kingdom Research and Innovation & 2022-2023 Takanori Nakane
 
 ## Building Executable
 

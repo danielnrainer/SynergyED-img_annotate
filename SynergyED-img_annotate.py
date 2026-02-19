@@ -414,17 +414,40 @@ class TEMImageEditor(QMainWindow):
         """Load an image file."""
         file_path, _ = QFileDialog.getOpenFileName(
             self, "Open Image", "",
-            "Image Files (*.tif *.tiff *.png *.jpg *.jpeg *.bmp);;All Files (*.*)"
+            "Image Files (*.rodhypix *.tif *.tiff *.png *.jpg *.jpeg *.bmp);;RODHyPix Files (*.rodhypix);;TIFF Files (*.tif *.tiff);;All Files (*.*)"
         )
         
         if file_path:
-            success, error, dimensions = self.image_processor.load_image(file_path)
+            success, error, dimensions, pixel_metadata = self.image_processor.load_image(file_path)
             
             if success:
                 self.current_file = file_path
                 width, height = dimensions
                 filename = Path(file_path).name
                 self.file_info_label.setText(f"File: {filename} | Size: {width}x{height}px")
+                
+                # If we got pixel metadata from rodhypix file, automatically set the calibration
+                if pixel_metadata and 'pixel_size_nm' in pixel_metadata:
+                    # Set the pixel size calibration automatically
+                    nm_per_pixel = pixel_metadata['pixel_size_nm']
+                    um_per_pixel = pixel_metadata['pixel_size_um']
+                    
+                    # Determine which unit is more appropriate (prefer nm for < 1 µm, µm for >= 1 µm)
+                    if um_per_pixel >= 1.0:
+                        self.nm_per_pixel = um_per_pixel
+                        self.pixel_size_unit = "µm"
+                        self.pixel_size_unit_combo.setCurrentText("µm")
+                    else:
+                        self.nm_per_pixel = nm_per_pixel
+                        self.pixel_size_unit = "nm"
+                        self.pixel_size_unit_combo.setCurrentText("nm")
+                    
+                    self._update_pixel_size_display()
+                    
+                    # Show a message to the user
+                    info_text = f"Pixel size from file header: {nm_per_pixel:.1f} nm ({um_per_pixel:.3f} µm)"
+                    print(info_text)
+                    self.file_info_label.setText(f"File: {filename} | Size: {width}x{height}px | {info_text}")
                 
                 # Auto adjust and display
                 self.image_processor.auto_adjust_contrast()
@@ -1023,7 +1046,7 @@ class BatchAnnotationDialog(QDialog):
         """Add files to the batch list."""
         files, _ = QFileDialog.getOpenFileNames(
             self, "Select Images", "",
-            "Image Files (*.tif *.tiff *.png *.jpg *.jpeg *.bmp);;All Files (*.*)"
+            "Image Files (*.rodhypix *.tif *.tiff *.png *.jpg *.jpeg *.bmp);;RODHyPix Files (*.rodhypix);;TIFF Files (*.tif *.tiff);;All Files (*.*)"
         )
         if files:
             for file in files:
@@ -1188,10 +1211,20 @@ class BatchAnnotationDialog(QDialog):
             
             try:
                 # Load image
-                success, error, _ = processor.load_image(file_path)
+                success, error, _, pixel_metadata = processor.load_image(file_path)
                 if not success:
                     failed.append((file_path, error))
                     continue
+                
+                # Use pixel metadata from rodhypix file if available, otherwise use provided value
+                file_nm_per_pixel = nm_per_pixel
+                if pixel_metadata and 'pixel_size_nm' in pixel_metadata:
+                    # Use pixel size from file header
+                    if pixel_size_unit == "µm":
+                        file_nm_per_pixel = pixel_metadata['pixel_size_um']
+                    else:
+                        file_nm_per_pixel = pixel_metadata['pixel_size_nm']
+                    print(f"Using pixel size from {Path(file_path).name}: {file_nm_per_pixel:.3f} {pixel_size_unit}")
                 
                 # Auto adjust if requested
                 if auto_bc:
@@ -1200,7 +1233,7 @@ class BatchAnnotationDialog(QDialog):
                 # Render with overlays
                 q_image = renderer.render_image_with_overlays(
                     processor.get_current_image(),
-                    nm_per_pixel
+                    file_nm_per_pixel
                 )
                 
                 if q_image is None:
